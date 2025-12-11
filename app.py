@@ -33,7 +33,6 @@ selected_cities = st.sidebar.multiselect(
     default=["Riyadh", "Jeddah", "Dammam", "Abha"]
 )
 
-# CHANGED: use discrete options instead of raw slider
 days_option = st.sidebar.selectbox(
     "Time window",
     options=[
@@ -123,6 +122,10 @@ if not all_dfs:
 df = pd.concat(all_dfs, ignore_index=True)
 df = df.sort_values("time")
 
+# Extra time fields
+df["date"] = df["time"].dt.date
+df["hour"] = df["time"].dt.hour
+
 # -------------------------------
 # KPIs (top-level metrics)
 # -------------------------------
@@ -135,7 +138,7 @@ overall_avg_wind = df["windspeed"].mean()
 num_cities = df["city"].nunique()
 num_records = len(df)
 
-# NEW: hottest and windiest cities
+# hottest and windiest cities
 hottest_row = df.loc[df["temp"].idxmax()]
 windiest_row = df.loc[df["windspeed"].idxmax()]
 
@@ -150,12 +153,12 @@ col5.metric("Avg Wind Speed", f"{overall_avg_wind:.1f} m/s")
 col6, col7 = st.columns(2)
 with col6:
     st.info(
-        f"🔥 **Hottest city in this window:** "
+        f"🔥 **Hottest city:** "
         f"{hottest_row['city']} ({hottest_row['temp']:.1f} °C at {hottest_row['time']})"
     )
 with col7:
     st.info(
-        f"💨 **Windiest city in this window:** "
+        f"💨 **Windiest city:** "
         f"{windiest_row['city']} ({windiest_row['windspeed']:.1f} m/s at {windiest_row['time']})"
     )
 
@@ -181,127 +184,122 @@ latest_rows_display.rename(columns={
 }, inplace=True)
 
 st.dataframe(latest_rows_display, use_container_width=True)
+
 st.markdown("---")
 
-# -------------------------------
-# Line chart: Time series by city (selectable metric)
-# -------------------------------
-st.subheader("Time Series by City")
+# =====================================================
+# 1) Small multiples: one time-series chart per city
+# =====================================================
+st.subheader("1️⃣ Hourly Temperature – Small Multiples")
 
-metric_choice = st.radio(
-    "Select metric to visualize:",
-    options=["Temperature (°C)", "Wind Speed (m/s)"],
-    horizontal=True
-)
-
-if metric_choice.startswith("Temperature"):
-    y_col = "temp"
-    y_label = "Temperature (°C)"
-    title_line = "Hourly Temperature by City"
-else:
-    y_col = "windspeed"
-    y_label = "Wind Speed (m/s)"
-    title_line = "Hourly Wind Speed by City"
-
-fig_line = px.line(
+fig_small = px.line(
     df,
     x="time",
-    y=y_col,
-    color="city",
-    markers=False,
-    labels={"time": "Time", y_col: y_label, "city": "City"},
-    title=title_line
+    y="temp",
+    facet_col="city",
+    facet_col_wrap=2,
+    labels={"time": "Time", "temp": "Temperature (°C)", "city": "City"},
+    title="Hourly Temperature for Each City"
 )
-fig_line.update_layout(template="plotly_white", legend_title_text="City")
-st.plotly_chart(fig_line, use_container_width=True)
+fig_small.update_layout(template="plotly_white", showlegend=False)
+st.plotly_chart(fig_small, use_container_width=True)
 
 st.markdown("---")
 
-# -------------------------------
-# Aggregations per city
-# -------------------------------
-summary = df.groupby("city").agg(
-    avg_temp=("temp", "mean"),
-    max_temp=("temp", "max"),
-    min_temp=("temp", "min"),
-    avg_wind=("windspeed", "mean")
-).reset_index()
+# =====================================================
+# 2) Heatmaps: daily and hourly patterns
+# =====================================================
+st.subheader("2️⃣ Temperature Heatmaps")
 
-colA, colB = st.columns(2)
+# 2.a – Average daily temperature per city (city × date)
+daily = df.groupby(["city", "date"]).agg(avg_temp=("temp", "mean")).reset_index()
+pivot_daily = daily.pivot(index="city", columns="date", values="avg_temp")
 
-with colA:
-    st.subheader("Average Temperature per City")
-    fig_bar_temp = px.bar(
-        summary,
-        x="city",
-        y="avg_temp",
-        text_auto=".1f",
-        labels={"city": "City", "avg_temp": "Avg Temperature (°C)"},
-        title="Average Temperature by City"
-    )
-    fig_bar_temp.update_layout(template="plotly_white")
-    st.plotly_chart(fig_bar_temp, use_container_width=True)
+fig_daily_heat = px.imshow(
+    pivot_daily.values,
+    x=[str(d) for d in pivot_daily.columns],
+    y=pivot_daily.index,
+    labels={"x": "Date", "y": "City", "color": "Avg Temp (°C)"},
+    title="Average Daily Temperature (City × Date)"
+)
+fig_daily_heat.update_layout(template="plotly_white")
+st.plotly_chart(fig_daily_heat, use_container_width=True)
 
-with colB:
-    st.subheader("Average Wind Speed per City")
-    fig_bar_wind = px.bar(
-        summary,
-        x="city",
-        y="avg_wind",
-        text_auto=".1f",
-        labels={"city": "City", "avg_wind": "Avg Wind Speed (m/s)"},
-        title="Average Wind Speed by City"
-    )
-    fig_bar_wind.update_layout(template="plotly_white")
-    st.plotly_chart(fig_bar_wind, use_container_width=True)
+# 2.b – Average hourly temperature pattern (city × hour)
+hourly = df.groupby(["city", "hour"]).agg(avg_temp=("temp", "mean")).reset_index()
+pivot_hourly = hourly.pivot(index="city", columns="hour", values="avg_temp")
+
+fig_hour_heat = px.imshow(
+    pivot_hourly.values,
+    x=pivot_hourly.columns,
+    y=pivot_hourly.index,
+    labels={"x": "Hour of Day", "y": "City", "color": "Avg Temp (°C)"},
+    title="Average Hour-of-Day Temperature (City × Hour)"
+)
+fig_hour_heat.update_layout(template="plotly_white")
+st.plotly_chart(fig_hour_heat, use_container_width=True)
 
 st.markdown("---")
 
-# -------------------------------
-# Detailed per-city view (select box)
-# -------------------------------
-st.subheader("Detailed City View")
+# =====================================================
+# 3) Temperature distribution per city (boxplot)
+# =====================================================
+st.subheader("3️⃣ Temperature Range per City")
 
-city_selected = st.selectbox("Select a city for detailed analysis", options=sorted(df["city"].unique()))
-city_df = df[df["city"] == city_selected].copy()
+fig_box = px.box(
+    df,
+    x="city",
+    y="temp",
+    points="all",
+    labels={"city": "City", "temp": "Temperature (°C)"},
+    title="Temperature Distribution by City"
+)
+fig_box.update_layout(template="plotly_white")
+st.plotly_chart(fig_box, use_container_width=True)
 
-tab1, tab2, tab3 = st.tabs(["Time Series", "Distribution", "Temp vs Wind"])
+st.markdown("---")
 
-with tab1:
-    st.write(f"### {city_selected} – Temperature Trend")
-    fig_city_line = px.line(
-        city_df,
-        x="time",
-        y="temp",
-        labels={"time": "Time", "temp": "Temperature (°C)"},
-        title=f"Hourly Temperature in {city_selected}"
-    )
-    fig_city_line.update_layout(template="plotly_white")
-    st.plotly_chart(fig_city_line, use_container_width=True)
+# =====================================================
+# 4) Temp vs Wind – relationship
+# =====================================================
+st.subheader("4️⃣ Relationship Between Temperature and Wind Speed")
 
-with tab2:
-    st.write(f"### {city_selected} – Temperature Distribution")
-    fig_hist = px.histogram(
-        city_df,
-        x="temp",
-        nbins=15,
-        labels={"temp": "Temperature (°C)"},
-        title=f"Temperature Histogram - {city_selected}"
-    )
-    fig_hist.update_layout(template="plotly_white")
-    st.plotly_chart(fig_hist, use_container_width=True)
+fig_scatter = px.scatter(
+    df,
+    x="temp",
+    y="windspeed",
+    color="city",
+    marginal_x="histogram",
+    marginal_y="box",
+    labels={"temp": "Temperature (°C)", "windspeed": "Wind Speed (m/s)", "city": "City"},
+    title="Temperature vs Wind Speed with Distributions"
+)
+fig_scatter.update_layout(template="plotly_white")
+st.plotly_chart(fig_scatter, use_container_width=True)
 
-with tab3:
-    st.write(f"### {city_selected} – Temperature vs Wind Speed")
-    fig_scatter = px.scatter(
-        city_df,
-        x="temp",
-        y="windspeed",
-        labels={"temp": "Temperature (°C)", "windspeed": "Wind Speed (m/s)"},
-        title=f"Temperature vs Wind Speed - {city_selected}"
-    )
-    fig_scatter.update_layout(template="plotly_white")
-    st.plotly_chart(fig_scatter, use_container_width=True)
+st.markdown("---")
+
+# =====================================================
+# 5) Wind Rose (direction vs speed) per city
+# =====================================================
+st.subheader("5️⃣ Wind Rose (Direction vs Speed)")
+
+wind_city = st.selectbox(
+    "Select a city for wind rose",
+    options=sorted(df["city"].unique())
+)
+wind_df = df[df["city"] == wind_city]
+
+fig_rose = px.bar_polar(
+    wind_df,
+    r="windspeed",
+    theta="winddirection",
+    color="windspeed",
+    labels={"windspeed": "Wind Speed (m/s)", "winddirection": "Direction (°)"},
+    title=f"Wind Rose – {wind_city}"
+)
+fig_rose.update_layout(template="plotly_white")
+st.plotly_chart(fig_rose, use_container_width=True)
 
 st.markdown("---")
 st.write("Data last fetched for the selected time window. Click **Refresh data** in the sidebar to update.")
